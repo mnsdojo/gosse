@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title></title>
+    <link href="css/style.css" rel="stylesheet" />
+  </head>
+  <body>
+    <h1>GoSSE</h1>
+    <div id="notifications"></div>
+    <script src="./index.js"></script>
+    <script>
+      const notificationsDiv = document.getElementById("notifications");
+      // create a event source
+      const eventSource = new EventSource("/poll");
+      eventSource.onmessage = function (event) {
+        const newmessage = document.createElement("div");
+        newmessage.textContent = `File changed at : ${event.data}`;
+        notifications.prepend(newmessage);
+        window.location.reload();
+      };
+      //handle errors
+      eventSource.onerror = function (event) {
+        console.error("EventSource failed : ", event);
+        eventSource.close();
+      };
+    </script>
+  </body>
+</html>
