@@ -21,9 +21,7 @@ type Config struct {
 var (
 	mu                sync.Mutex
 	lastModifications time.Time
-	// clients manage
-	clients = make(map[http.ResponseWriter]bool)
-	cfg     Config
+	clients           = make(map[chan []byte]bool)
 )
 
 func LoadConfig(filepath string) (Config, error) {
@@ -38,49 +36,45 @@ func LoadConfig(filepath string) (Config, error) {
 	return config, nil
 }
 
-func setupServer() error {
-	var err error
-	cfg, err = LoadConfig("config.json")
+func main() {
+	cfg, err := LoadConfig("config.json")
 	if err != nil {
-		return err
+		log.Fatalf("Error loading config: %v", err)
 	}
+	go watchFiles(cfg.Folder, cfg.Delay) // Start watching files
 	fs := http.FileServer(http.Dir(cfg.Folder))
 	http.Handle("/", fs)
 	http.HandleFunc("/poll", handlePoll)
-	log.Printf("server listening on port :%s ", cfg.Port)
-	return http.ListenAndServe(":"+cfg.Port, nil)
+	log.Printf("Server listening on port %s", cfg.Port)
+	if err := http.ListenAndServe(":"+cfg.Port, nil); err != nil {
+		log.Fatalf("Error starting server: %v", err)
+	}
 }
 
 func handlePoll(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	mu.Lock()
-	clients[w] = true
-	mu.Unlock()
-
-	defer func() {
-		mu.Lock()
-		delete(clients, w)
-		mu.Unlock()
-	}()
-
-	// keep conneection active/alive
-	//
 }
 
-func watchFiles(folder string) {
+func NotifyClients(content []byte) {
+	mu.Lock()
+	defer mu.Unlock()
+	for clientChan := range clients {
+		clientChan <- content // Send the actual content to the channel
+	}
+}
+
+func watchFiles(folder string, delay int) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatalf("error setting up file watcher :%v", err)
+		log.Fatal(err)
 	}
 	defer watcher.Close()
 
-	if err := watcher.Add(folder); err != nil {
-		log.Fatalf("Error watching folder: %v", err)
+	err = watcher.Add(folder)
+	if err != nil {
+		log.Fatal(err)
 	}
+
+	var lastChange time.Time
 	for {
 		select {
 		case event, ok := <-watcher.Events:
@@ -89,17 +83,23 @@ func watchFiles(folder string) {
 			}
 			if event.Op&fsnotify.Write == fsnotify.Write {
 				log.Printf("File modified: %s", event.Name)
-				lastModifications = time.Now()
 
+				// Debounce logic
+				lastChange = time.Now()
+				time.AfterFunc(time.Duration(delay)*time.Millisecond, func() {
+					if time.Since(lastChange) >= time.Duration(delay)*time.Millisecond {
+						content, err := os.ReadFile(event.Name)
+						if err == nil {
+							NotifyClients(content) // Notify clients with new content
+						}
+					}
+				})
 			}
-		case err := <-watcher.Errors:
-			log.Printf("watcher error :%v", err)
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Println("Error:", err)
 		}
-	}
-}
-
-func main() {
-	if err := setupServer(); err != nil {
-		log.Fatalf("Error setting up server :%v", err)
 	}
 }
