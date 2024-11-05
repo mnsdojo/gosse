@@ -11,12 +11,18 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+func handleReload() {
+	log.Println("filese reloading..")
+	updateChan <- "File reloaded...."
+}
+
 type Config struct {
 	Folder string `json:"folder"`
 	Port   int    `json:"port"`
 	Delay  int    `json:"delay"`
 }
 
+var updateChan = make(chan string)
 var config Config
 
 func LoadConfig(filepath string) (Config, error) {
@@ -60,10 +66,7 @@ func watchFiles(folder string, delay int) {
 					changeTimer.Stop() // Stop the existing timer if it's running
 				}
 				// Start a new timer with the specified delay
-				changeTimer = time.AfterFunc(time.Duration(delay)*time.Millisecond, func() {
-					log.Println("Reloading files...")
-					// Here you could implement the logic to reload the files
-				})
+				changeTimer = time.AfterFunc(time.Duration(delay)*time.Millisecond, handleReload)
 			}
 		case err, ok := <-watcher.Errors: // Wait for errors from the watcher
 			if !ok {
@@ -78,6 +81,26 @@ func handlePoll(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+
+	}
+
+	go func() {
+		for {
+			select {
+			case update := <-updateChan:
+				fmt.Fprintf(w, "data :%s\n\n", update)
+				flusher.Flush()
+			}
+		}
+	}()
+
+	// wait for the client to disconnect
+	<-r.Context().Done()
 }
 
 func main() {
