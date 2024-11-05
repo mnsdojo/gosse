@@ -2,30 +2,24 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
 
 type Config struct {
-	Port     string `json:"port"`
-	Folder   string `json:"folder"`
-	LogLevel string `json:"log_level"`
-	Delay    int    `json:"delay"`
+	Folder string `json:"folder"`
+	Port   int    `json:"port"`
+	Delay  int    `json:"delay"`
 }
 
-var (
-	mu                sync.Mutex
-	lastModifications time.Time
-	clients           = make(map[chan []byte]bool)
-)
+var config Config
 
 func LoadConfig(filepath string) (Config, error) {
-	var config Config
 	data, err := os.ReadFile(filepath)
 	if err != nil {
 		return config, err
@@ -36,70 +30,71 @@ func LoadConfig(filepath string) (Config, error) {
 	return config, nil
 }
 
-func main() {
-	cfg, err := LoadConfig("config.json")
+// handling file watch...
+func watchFiles(folder string, delay int) {
+	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatalf("Error loading config: %v", err)
+		log.Fatal(err) // Exit if we fail to create the watcher
 	}
-	go watchFiles(cfg.Folder, cfg.Delay) // Start watching files
-	fs := http.FileServer(http.Dir(cfg.Folder))
-	http.Handle("/", fs)
-	http.HandleFunc("/poll", handlePoll)
-	log.Printf("Server listening on port %s", cfg.Port)
-	if err := http.ListenAndServe(":"+cfg.Port, nil); err != nil {
-		log.Fatalf("Error starting server: %v", err)
+	defer watcher.Close() // Ensure the watcher is closed when the function exits
+
+	// Add the specified folder to the watcher
+	err = watcher.Add(folder)
+	if err != nil {
+		log.Fatal(err) // Exit if we fail to add the folder to watch
+	}
+
+	var changeTimer *time.Timer // Declare a pointer to a Timer that will handle change delays
+
+	for {
+		select {
+		case event, ok := <-watcher.Events: // Wait for events from the watcher
+			if !ok {
+				return // Exit if the channel is closed
+			}
+			// Check if the event is a write operation (file modification)
+			if event.Op&fsnotify.Write == fsnotify.Write {
+				log.Printf("Modified file: %s\n", event.Name) // Log the modified file name
+
+				if changeTimer != nil {
+					changeTimer.Stop() // Stop the existing timer if it's running
+				}
+				// Start a new timer with the specified delay
+				changeTimer = time.AfterFunc(time.Duration(delay)*time.Millisecond, func() {
+					log.Println("Reloading files...")
+					// Here you could implement the logic to reload the files
+				})
+			}
+		case err, ok := <-watcher.Errors: // Wait for errors from the watcher
+			if !ok {
+				return // Exit if the channel is closed
+			}
+			log.Println("Error:", err)
+		}
 	}
 }
 
 func handlePoll(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
 }
 
-func NotifyClients(content []byte) {
-	mu.Lock()
-	defer mu.Unlock()
-	for clientChan := range clients {
-		clientChan <- content // Send the actual content to the channel
-	}
-}
-
-func watchFiles(folder string, delay int) {
-	watcher, err := fsnotify.NewWatcher()
+func main() {
+	cfg, err := LoadConfig("config.json")
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("error loading config : %v", err)
 	}
-	defer watcher.Close()
+	go watchFiles(cfg.Folder, cfg.Delay)
 
-	err = watcher.Add(folder)
-	if err != nil {
-		log.Fatal(err)
-	}
+	fs := http.FileServer(http.Dir(cfg.Folder))
+	http.Handle("/", fs)
 
-	var lastChange time.Time
-	for {
-		select {
-		case event, ok := <-watcher.Events:
-			if !ok {
-				return
-			}
-			if event.Op&fsnotify.Write == fsnotify.Write {
-				log.Printf("File modified: %s", event.Name)
+	http.HandleFunc("/poll", handlePoll)
 
-				// Debounce logic
-				lastChange = time.Now()
-				time.AfterFunc(time.Duration(delay)*time.Millisecond, func() {
-					if time.Since(lastChange) >= time.Duration(delay)*time.Millisecond {
-						content, err := os.ReadFile(event.Name)
-						if err == nil {
-							NotifyClients(content) // Notify clients with new content
-						}
-					}
-				})
-			}
-		case err, ok := <-watcher.Errors:
-			if !ok {
-				return
-			}
-			log.Println("Error:", err)
-		}
+	log.Printf("server listening on port: %d", cfg.Port)
+
+	if err := http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), nil); err != nil {
+		log.Fatalf("error starting server: %v", err)
 	}
 }

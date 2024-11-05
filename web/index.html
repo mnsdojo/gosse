@@ -1,65 +1,31 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>GoSSE File Watcher</title>
-    <link href="css/style.css" rel="stylesheet" />
-    <style>
-      .notification {
-        padding: 10px;
-        margin: 5px 0;
-        background-color: #f0f0f0;
-        border-left: 4px solid #4caf50;
-        animation: fadeIn 0.5s ease-in;
-      }
-
-      @keyframes fadeIn {
-        from {
-          opacity: 0;
-          transform: translateY(-10px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
-      }
-
-      #notifications {
-        max-height: 400px;
-        overflow-y: auto;
-        padding: 10px;
-      }
-
-      .notification:first-child {
-        border-left-color: #2196f3;
-      }
-    </style>
-  </head>
-  <body>
-    <h1>GoSSE File Watcher hello</h1>
-    <h2>Testing..</h2>
-    <div id="notifications"></div>
-    <script>
-      function fetchContent() {
-        fetch("/poll")
-          .then((response) => {
-            if (response.ok) {
-              return response.text();
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Live Reload Example</title>
+        <script>
+            // Poll the server every 500ms to check for changes
+            function pollForChanges() {
+                fetch("/poll")
+                    .then((response) => response.text())
+                    .then((text) => {
+                        if (text === "reload") {
+                            // If the server indicates a reload, refresh the page
+                            location.reload();
+                        }
+                    })
+                    .catch((error) =>
+                        console.error("Error polling server:", error),
+                    );
             }
-            throw new Error("No new content");
-          })
-          .then((content) => {
-            document.getElementById("content").innerHTML = content;
-            fetchContent(); // Reconnect for more updates
-          })
-          .catch((error) => {
-            console.log(error);
-            setTimeout(fetchContent, 1000); // Retry after a delay
-          });
-      }
 
-      fetchContent(); // Initial call
-    </script>
-  </body>
+            // Set an interval to poll the server for changes
+            setInterval(pollForChanges, 500);
+        </script>
+    </head>
+    <body>
+        <h1>Live Reload Demo</h1>
+        <p>Hello to GoSSE</p>
+    </body>
 </html>
